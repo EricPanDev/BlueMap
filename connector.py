@@ -278,11 +278,13 @@ class BlueMapConnector:
             'num_values': num_values,
             'is_little_endian': is_little_endian,
             'is_indexed': is_indexed,
+            'attribute_count': attribute_count,
         }
         
-        # Parse attributes (7 expected: position, normal, color, uv, ao, blocklight, sunlight)
+        # Parse attributes based on the count in the header
+        # BlueMap typically has 7 attributes, but we parse based on what the file says
         attributes = []
-        for i in range(7):  # Always 7 attributes in BlueMap PRBM
+        for i in range(attribute_count):
             # Read attribute name (null-terminated string)
             name_end = data.find(b'\x00', offset)
             if name_end == -1:
@@ -348,9 +350,20 @@ class BlueMapConnector:
             total_values = num_values * values_per_vertex
             total_bytes = total_values * component_size
             
+            # Bounds check before reading attribute data
+            if offset + total_bytes > len(data):
+                raise ValueError(f"Insufficient data for attribute '{attr_name}': "
+                               f"need {total_bytes} bytes at offset {offset}, "
+                               f"but only {len(data) - offset} bytes available")
+            
             attr_data = []
             for j in range(total_values):
                 val_offset = offset + j * component_size
+                
+                # Additional bounds check (redundant but explicit for safety)
+                if val_offset + component_size > len(data):
+                    raise ValueError(f"Buffer overrun reading attribute '{attr_name}' "
+                                   f"at value {j}/{total_values}")
                 
                 # Unpack value based on type
                 if component_type == 'f':
@@ -389,11 +402,21 @@ class BlueMapConnector:
         
         materials = []
         while offset + 4 <= len(data):
+            # Bounds check for material_id
+            if offset + 4 > len(data):
+                break
+                
             material_id = struct.unpack('<i', data[offset:offset+4])[0]
             offset += 4
             
             if material_id == -1:
                 break
+            
+            # Bounds check for start_idx and count
+            if offset + 8 > len(data):
+                raise ValueError(f"Insufficient data for material group: "
+                               f"need 8 bytes at offset {offset}, "
+                               f"but only {len(data) - offset} bytes available")
             
             start_idx = struct.unpack('<i', data[offset:offset+4])[0]
             offset += 4

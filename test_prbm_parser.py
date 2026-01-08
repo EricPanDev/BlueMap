@@ -261,6 +261,46 @@ def test_coordinate_conversion():
     return True
 
 
+def test_malformed_data():
+    """Test parser with malformed data to ensure proper error handling."""
+    print("\n\nTesting Malformed Data Handling")
+    print("=" * 60)
+    
+    connector = BlueMapConnector("http://localhost:8100")
+    
+    # Test 1: File too short
+    print("\n1. Testing file too short...")
+    try:
+        connector.parse_prbm_tile(b"short")
+        print("   ✗ Should have raised ValueError")
+        return False
+    except ValueError as e:
+        print(f"   ✓ Correctly raised: {e}")
+    
+    # Test 2: Truncated file (header only)
+    print("\n2. Testing truncated file...")
+    try:
+        truncated = bytes([1, 0b0_0_0_00111, 3, 0, 0, 0, 0, 0])
+        connector.parse_prbm_tile(truncated)
+        print("   ✗ Should have raised ValueError for insufficient data")
+        return False
+    except ValueError as e:
+        print(f"   ✓ Correctly raised: {e}")
+    
+    # Test 3: Invalid version
+    print("\n3. Testing invalid version...")
+    try:
+        invalid_version = bytes([99, 0b0_0_0_00111, 3, 0, 0, 0, 0, 0])
+        connector.parse_prbm_tile(invalid_version)
+        print("   ✗ Should have raised ValueError for unsupported version")
+        return False
+    except ValueError as e:
+        print(f"   ✓ Correctly raised: {e}")
+    
+    print("\n✓ Malformed data handling test passed!")
+    return True
+
+
 def main():
     """Run all tests."""
     print("BlueMap PRBM Parser Test Suite")
@@ -268,13 +308,15 @@ def main():
     
     test1_passed = test_prbm_parser()
     test2_passed = test_coordinate_conversion()
+    test3_passed = test_malformed_data()
     
     print("\n" + "=" * 60)
     print("Test Summary:")
     print(f"  PRBM Parser: {'✓ PASSED' if test1_passed else '✗ FAILED'}")
     print(f"  Coordinate Conversion: {'✓ PASSED' if test2_passed else '✗ FAILED'}")
+    print(f"  Malformed Data Handling: {'✓ PASSED' if test3_passed else '✗ FAILED'}")
     
-    if test1_passed and test2_passed:
+    if test1_passed and test2_passed and test3_passed:
         print("\n✓ All tests passed!")
         return 0
     else:
