@@ -25,10 +25,8 @@ Usage:
 """
 
 import requests
-import json
 from typing import Dict, List, Tuple, Optional, Any
 from urllib.parse import urljoin
-import struct
 
 
 class BlueMapConnector:
