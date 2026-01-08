@@ -5,30 +5,23 @@ Block Search Tool for BlueMap
 This script uses the BlueMap connector to search for blocks on a BlueMap web server
 and yields their in-game coordinates.
 
-IMPORTANT LIMITATION:
-The PRBM format used by BlueMap contains rendered geometry data (vertices, colors, triangles)
-but does not include block type information. This means we can find WHERE blocks are located,
-but we cannot identify WHAT TYPE of blocks they are (e.g., oak_log vs stone vs diamond_ore).
+CAPABILITY: BLOCK TYPE IDENTIFICATION
+The tool uses textures.json to map PRBM material IDs to block resource paths, allowing
+identification of specific block types like oak logs, diamond ore, etc.
 
-For example, if searching for "oak logs":
-- We can find all blocks in a given area
-- We can filter by height range (trees are typically at surface level, y >= 60)
-- We can filter by world position
-- But we CANNOT distinguish oak logs from other block types in the PRBM data
-
-The material IDs in PRBM files correspond to textures used for rendering, not block types.
-To identify specific block types, you would need access to the original world data files
-(e.g., Minecraft region files) rather than the rendered BlueMap tiles.
+Two search modes:
+1. ALL BLOCKS: Search for all blocks in an area (--radius or --tile-range only)
+2. SPECIFIC BLOCK TYPE: Search for specific blocks (use --block-type option)
 
 Usage:
     # Search for all blocks in an area around spawn
     python search.py http://localhost:8100 world --radius 5
     
-    # Search with height filter (surface blocks where trees grow)
-    python search.py http://localhost:8100 world --radius 3 --min-y 60 --max-y 100
+    # Search for oak logs specifically
+    python search.py http://localhost:8100 world --radius 5 --block-type minecraft:block/oak_log
     
-    # Search specific tile range
-    python search.py http://localhost:8100 world --tile-range "-2,-2" "2,2"
+    # Search for diamond ore at diamond level
+    python search.py http://localhost:8100 world --radius 10 --block-type minecraft:block/diamond_ore --min-y -64 --max-y 16
 """
 
 import sys
@@ -371,8 +364,8 @@ def main():
     """Main entry point for the search tool."""
     parser = argparse.ArgumentParser(
         description='Search for blocks on a BlueMap server and yield their in-game coordinates.\n\n'
-                    'IMPORTANT: This tool cannot identify specific block types (e.g., oak logs)\n'
-                    'because PRBM files only contain geometry, not block metadata.',
+                    'BLOCK TYPE IDENTIFICATION: Use --block-type to search for specific blocks\n'
+                    'like oak logs using textures.json mapping. Without --block-type, finds all blocks.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Examples:
