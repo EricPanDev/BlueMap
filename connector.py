@@ -6,7 +6,9 @@ This module provides a Python API to interact with a hosted BlueMap web interfac
 It allows you to:
 - Fetch map settings and metadata
 - Request and parse map tiles
-- Search for specific blocks within chunks
+- Parse PRBM (high-resolution tile) files
+- Find blocks within tiles and get their in-game coordinates
+- Convert between tile and world coordinates
 
 Usage:
     from connector import BlueMapConnector
@@ -18,14 +20,17 @@ Usage:
     maps = connector.get_maps()
     print(f"Available maps: {list(maps.keys())}")
     
-    # Search for a block
-    results = connector.search_block("diamond_ore", map_id="world", 
-                                    center_x=0, center_z=0, radius=5)
-    print(f"Found {len(results)} chunks with diamond_ore")
+    # Find blocks in a tile and get in-game coordinates
+    result = connector.find_blocks("world", tile_x=0, tile_z=0)
+    print(f"Found {len(result['block_positions'])} unique blocks")
+    for x, y, z in result['block_positions'][:5]:
+        print(f"  Block at ({x}, {y}, {z})")
 """
 
 import requests
-from typing import Dict, List, Tuple, Optional, Any
+import struct
+import math
+from typing import Dict, List, Tuple, Optional, Any, Set
 from urllib.parse import urljoin
 
 
@@ -213,27 +218,236 @@ class BlueMapConnector:
         """
         Parse a PRBM (BlueMap high-res tile) file.
         
-        Note: This is a basic parser that extracts metadata. Full geometry
-        parsing would require implementing the complete PRBM format specification.
+        This parser implements the PRBM format specification to extract
+        geometry data including vertex positions, colors, lighting, etc.
         
         Args:
             data: Raw PRBM file data
             
         Returns:
-            Dictionary with parsed tile information
+            Dictionary with parsed tile information including:
+            - version: Format version
+            - num_triangles: Number of triangles
+            - positions: List of (x, y, z) vertex positions
+            - colors: List of (r, g, b) colors per vertex
+            - materials: Material group information
+            - Other attributes (uvs, ao, lighting, normals)
+            
+        Raises:
+            ValueError: If the PRBM file is invalid or corrupted
         """
         if len(data) < 12:
             raise ValueError("Invalid PRBM file: too short")
         
-        # PRBM files are binary format used by BlueMap
-        # This is a simplified parser - full implementation would need
-        # to parse the entire geometry structure
+        offset = 0
+        
+        # Read header (2 bytes)
+        version = data[offset]
+        offset += 1
+        
+        header_bits = data[offset]
+        offset += 1
+        
+        # Parse header bits
+        attribute_count = header_bits & 0b00111
+        is_little_endian = not bool((header_bits >> 3) & 0b1)
+        is_indexed = bool((header_bits >> 5) & 0b1)
+        
+        if version != 1:
+            raise ValueError(f"Unsupported PRBM version: {version}")
+        
+        if not is_little_endian:
+            raise ValueError("Big endian PRBM files not supported")
+        
+        # Read number of values (3 bytes, little endian)
+        num_values = struct.unpack('<I', data[offset:offset+3] + b'\x00')[0]
+        offset += 3
+        
+        # Read number of indices (3 bytes, little endian)
+        num_indices = struct.unpack('<I', data[offset:offset+3] + b'\x00')[0]
+        offset += 3
+        
+        if is_indexed and num_indices > 0:
+            raise ValueError("Indexed PRBM files not yet supported")
+        
+        num_triangles = num_values // 3
         
         result = {
-            'size': len(data),
-            'raw_data': data,
-            # Additional parsing would go here
+            'version': version,
+            'num_triangles': num_triangles,
+            'num_values': num_values,
+            'is_little_endian': is_little_endian,
+            'is_indexed': is_indexed,
+            'attribute_count': attribute_count,
         }
+        
+        # Parse attributes based on the count in the header
+        # BlueMap typically has 7 attributes, but we parse based on what the file says
+        attributes = []
+        for i in range(attribute_count):
+            # Read attribute name (null-terminated string)
+            name_end = data.find(b'\x00', offset)
+            if name_end == -1:
+                raise ValueError(f"Invalid attribute name at offset {offset}")
+            
+            attr_name = data[offset:name_end].decode('ascii')
+            offset = name_end + 1
+            
+            # Read attribute type byte
+            attr_type = data[offset]
+            offset += 1
+            
+            # Parse attribute type
+            is_float = not bool(attr_type & 0x80)
+            is_normalized = bool(attr_type & 0x40)
+            cardinality_bits = (attr_type >> 4) & 0x3
+            # Cardinality: 0=scalar(1), 1=2D(2), 2=3D(3), 3=4D(4)
+            cardinality = cardinality_bits + 1 if cardinality_bits > 0 else 1
+            
+            encoding = attr_type & 0x0F
+            
+            # Determine byte size per component
+            if encoding == 1:  # SIGNED_32BIT_FLOAT
+                component_size = 4
+                component_type = 'f'
+            elif encoding == 3:  # SIGNED_8BIT_INT
+                component_size = 1
+                component_type = 'b'
+            elif encoding == 4:  # SIGNED_16BIT_INT
+                component_size = 2
+                component_type = 'h'
+            elif encoding == 6:  # SIGNED_32BIT_INT
+                component_size = 4
+                component_type = 'i'
+            elif encoding == 7:  # UNSIGNED_8BIT_INT
+                component_size = 1
+                component_type = 'B'
+            elif encoding == 8:  # UNSIGNED_16BIT_INT
+                component_size = 2
+                component_type = 'H'
+            elif encoding == 10:  # UNSIGNED_32BIT_INT
+                component_size = 4
+                component_type = 'I'
+            else:
+                raise ValueError(f"Unknown encoding: {encoding}")
+            
+            attributes.append({
+                'name': attr_name,
+                'is_float': is_float,
+                'is_normalized': is_normalized,
+                'cardinality': cardinality,
+                'encoding': encoding,
+                'component_size': component_size,
+                'component_type': component_type
+            })
+            
+            # Padding to 4-byte boundary
+            padding = (4 - (offset % 4)) % 4
+            offset += padding
+            
+            # Read attribute data
+            values_per_vertex = cardinality
+            total_values = num_values * values_per_vertex
+            total_bytes = total_values * component_size
+            
+            # Bounds check before reading attribute data
+            if offset + total_bytes > len(data):
+                raise ValueError(f"Insufficient data for attribute '{attr_name}': "
+                               f"need {total_bytes} bytes at offset {offset}, "
+                               f"but only {len(data) - offset} bytes available")
+            
+            attr_data = []
+            for j in range(total_values):
+                val_offset = offset + j * component_size
+                
+                # Additional bounds check (redundant but explicit for safety)
+                if val_offset + component_size > len(data):
+                    raise ValueError(f"Buffer overrun reading attribute '{attr_name}' "
+                                   f"at value {j}/{total_values}")
+                
+                # Unpack value based on type
+                if component_type == 'f':
+                    val = struct.unpack('<f', data[val_offset:val_offset+4])[0]
+                elif component_type == 'b':
+                    val = struct.unpack('<b', data[val_offset:val_offset+1])[0]
+                    if is_normalized:
+                        # Normalize signed byte: -128..127 -> -1.0..1.0
+                        val = max(val / 127.0, -1.0)
+                elif component_type == 'h':
+                    val = struct.unpack('<h', data[val_offset:val_offset+2])[0]
+                elif component_type == 'i':
+                    val = struct.unpack('<i', data[val_offset:val_offset+4])[0]
+                elif component_type == 'B':
+                    val = struct.unpack('<B', data[val_offset:val_offset+1])[0]
+                    if is_normalized:
+                        val = val / 255.0
+                elif component_type == 'H':
+                    val = struct.unpack('<H', data[val_offset:val_offset+2])[0]
+                elif component_type == 'I':
+                    val = struct.unpack('<I', data[val_offset:val_offset+4])[0]
+                else:
+                    val = 0
+                
+                attr_data.append(val)
+            
+            offset += total_bytes
+            
+            # Store the parsed attribute data
+            result[attr_name] = attr_data
+        
+        # Parse material groups
+        # Padding to 4-byte boundary before material groups
+        padding = (4 - (offset % 4)) % 4
+        offset += padding
+        
+        materials = []
+        while offset + 4 <= len(data):
+            # Bounds check for material_id
+            if offset + 4 > len(data):
+                break
+                
+            material_id = struct.unpack('<i', data[offset:offset+4])[0]
+            offset += 4
+            
+            if material_id == -1:
+                break
+            
+            # Bounds check for start_idx and count
+            if offset + 8 > len(data):
+                raise ValueError(f"Insufficient data for material group: "
+                               f"need 8 bytes at offset {offset}, "
+                               f"but only {len(data) - offset} bytes available")
+            
+            start_idx = struct.unpack('<i', data[offset:offset+4])[0]
+            offset += 4
+            
+            count = struct.unpack('<i', data[offset:offset+4])[0]
+            offset += 4
+            
+            materials.append({
+                'material_id': material_id,
+                'start': start_idx,
+                'count': count
+            })
+        
+        result['materials'] = materials
+        result['attributes'] = attributes
+        
+        # Extract positions as list of tuples for easier use
+        if 'position' in result:
+            pos_data = result['position']
+            positions = []
+            for i in range(0, len(pos_data), 3):
+                positions.append((pos_data[i], pos_data[i+1], pos_data[i+2]))
+            result['positions'] = positions
+        
+        # Extract colors as list of tuples
+        if 'color' in result:
+            color_data = result['color']
+            colors = []
+            for i in range(0, len(color_data), 3):
+                colors.append((color_data[i], color_data[i+1], color_data[i+2]))
+            result['colors'] = colors
         
         return result
     
@@ -357,6 +571,143 @@ class BlueMapConnector:
                     pass
         
         return tiles
+    
+    def tile_to_world_coordinates(
+        self, 
+        tile_x: int, 
+        tile_z: int, 
+        grid_size: int = 16, 
+        offset_x: int = 0, 
+        offset_z: int = 0
+    ) -> Tuple[Tuple[int, int], Tuple[int, int]]:
+        """
+        Convert tile coordinates to world coordinate ranges.
+        
+        Based on BlueMap's Grid system, each tile covers a rectangular area
+        in the world. This function returns the min and max world coordinates
+        for a given tile.
+        
+        Args:
+            tile_x: Tile X coordinate
+            tile_z: Tile Z coordinate
+            grid_size: Size of each tile in blocks (default: 16)
+            offset_x: Grid offset in X direction (default: 0)
+            offset_z: Grid offset in Z direction (default: 0)
+            
+        Returns:
+            Tuple of ((min_x, min_z), (max_x, max_z)) world coordinates
+        """
+        min_x = tile_x * grid_size + offset_x
+        min_z = tile_z * grid_size + offset_z
+        max_x = (tile_x + 1) * grid_size + offset_x - 1
+        max_z = (tile_z + 1) * grid_size + offset_z - 1
+        
+        return ((min_x, min_z), (max_x, max_z))
+    
+    def world_to_tile_coordinates(
+        self,
+        world_x: int,
+        world_z: int,
+        grid_size: int = 16,
+        offset_x: int = 0,
+        offset_z: int = 0
+    ) -> Tuple[int, int]:
+        """
+        Convert world coordinates to tile coordinates.
+        
+        Args:
+            world_x: World X coordinate
+            world_z: World Z coordinate
+            grid_size: Size of each tile in blocks (default: 16)
+            offset_x: Grid offset in X direction (default: 0)
+            offset_z: Grid offset in Z direction (default: 0)
+            
+        Returns:
+            Tuple of (tile_x, tile_z) coordinates
+        """
+        tile_x = (world_x - offset_x) // grid_size
+        tile_z = (world_z - offset_z) // grid_size
+        
+        return (tile_x, tile_z)
+    
+    def find_blocks(
+        self,
+        map_id: str,
+        tile_x: int,
+        tile_z: int,
+        grid_size: int = 16,
+        offset_x: int = 0,
+        offset_z: int = 0,
+        lod: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Find and return block positions from a PRBM tile in in-game coordinates.
+        
+        This function downloads a tile, parses it, and returns the unique block
+        positions found in the tile geometry, converted to in-game world coordinates.
+        
+        Args:
+            map_id: The ID of the map
+            tile_x: Tile X coordinate
+            tile_z: Tile Z coordinate
+            grid_size: Size of each tile in blocks (default: 16)
+            offset_x: Grid offset in X direction (default: 0)
+            offset_z: Grid offset in Z direction (default: 0)
+            lod: Level of detail (must be 0 for PRBM tiles)
+            
+        Returns:
+            Dictionary containing:
+            - tile_coords: (tile_x, tile_z) coordinates
+            - world_bounds: ((min_x, min_z), (max_x, max_z)) world coordinate bounds
+            - num_triangles: Number of triangles in the tile
+            - num_vertices: Number of vertices
+            - block_positions: List of unique (x, y, z) block positions in world coordinates (sorted)
+            - vertex_positions: List of all (x, y, z) vertex positions in world coordinates
+            
+        Raises:
+            ValueError: If lod is not 0 (only high-res tiles are PRBM format)
+            requests.RequestException: If the tile cannot be fetched
+        """
+        if lod != 0:
+            raise ValueError("find_blocks only works with high-resolution tiles (lod=0)")
+        
+        # Get tile data
+        tile_data = self.get_tile(map_id, tile_x, tile_z, lod=0)
+        
+        # Parse PRBM file
+        parsed = self.parse_prbm_tile(tile_data)
+        
+        # Get world coordinate bounds for this tile
+        world_bounds = self.tile_to_world_coordinates(tile_x, tile_z, grid_size, offset_x, offset_z)
+        
+        # Convert vertex positions to world coordinates
+        # Positions in PRBM are relative to the tile origin
+        vertex_positions = []
+        block_positions: Set[Tuple[int, int, int]] = set()
+        
+        if 'positions' in parsed:
+            for pos in parsed['positions']:
+                # PRBM positions are in world coordinates already
+                world_x, world_y, world_z = pos
+                vertex_positions.append((world_x, world_y, world_z))
+                
+                # Convert to block coordinates (floor to get the block position)
+                block_x = math.floor(world_x)
+                block_y = math.floor(world_y)
+                block_z = math.floor(world_z)
+                
+                block_positions.add((block_x, block_y, block_z))
+        
+        return {
+            'tile_coords': (tile_x, tile_z),
+            'world_bounds': world_bounds,
+            'num_triangles': parsed.get('num_triangles', 0),
+            'num_vertices': len(vertex_positions),
+            'block_positions': sorted(list(block_positions)),  # Convert set to sorted list
+            'vertex_positions': vertex_positions,
+            'materials': parsed.get('materials', []),
+            'colors': parsed.get('colors', [])
+        }
 
 
 def main():

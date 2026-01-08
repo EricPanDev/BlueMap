@@ -7,6 +7,9 @@ A Python API connector for interacting with hosted BlueMap instances. This tool 
 - Connect to any hosted BlueMap instance via URL
 - Fetch map settings and metadata
 - Request map tiles (both high-res and low-res)
+- **Parse PRBM (high-resolution tile) files**
+- **Extract block positions in in-game world coordinates**
+- **Convert between tile and world coordinates**
 - Search for blocks within chunks/tiles
 - Check tile existence without full download
 - Fetch multiple tiles in an area
@@ -36,6 +39,59 @@ print(f"Available maps: {list(maps.keys())}")
 # Get map settings
 map_settings = connector.get_map_settings("world")
 print(f"Map name: {map_settings['name']}")
+```
+
+### Finding Blocks with In-Game Coordinates
+
+```python
+# Find all blocks in a tile and get their in-game coordinates
+result = connector.find_blocks(
+    map_id="world",
+    tile_x=0,
+    tile_z=0
+)
+
+print(f"Tile covers world coordinates: {result['world_bounds']}")
+print(f"Found {len(result['block_positions'])} unique blocks")
+print(f"Number of triangles: {result['num_triangles']}")
+
+# Print first 10 block positions
+for x, y, z in result['block_positions'][:10]:
+    print(f"  Block at world coordinates ({x}, {y}, {z})")
+```
+
+### Parsing PRBM Tiles
+
+```python
+# Download and parse a PRBM tile
+tile_data = connector.get_tile(map_id="world", x=0, z=0, lod=0)
+parsed = connector.parse_prbm_tile(tile_data)
+
+print(f"Version: {parsed['version']}")
+print(f"Triangles: {parsed['num_triangles']}")
+print(f"Vertices: {parsed['num_values']}")
+
+# Access vertex positions
+for i, (x, y, z) in enumerate(parsed['positions'][:5]):
+    print(f"  Vertex {i}: ({x:.2f}, {y:.2f}, {z:.2f})")
+
+# Access vertex colors
+for i, (r, g, b) in enumerate(parsed['colors'][:5]):
+    print(f"  Color {i}: RGB({r:.2f}, {g:.2f}, {b:.2f})")
+```
+
+### Coordinate Conversion
+
+```python
+# Convert tile coordinates to world coordinates
+tile_x, tile_z = 0, 0
+bounds = connector.tile_to_world_coordinates(tile_x, tile_z)
+print(f"Tile ({tile_x}, {tile_z}) covers world coords {bounds[0]} to {bounds[1]}")
+
+# Convert world coordinates to tile coordinates
+world_x, world_z = 100, 200
+tile = connector.world_to_tile_coordinates(world_x, world_z)
+print(f"World position ({world_x}, {world_z}) is in tile {tile}")
 ```
 
 ### Searching for Blocks
@@ -159,6 +215,111 @@ Fetch all tiles in a rectangular area.
 
 Returns: List of tuples (x, z, tile_data) for each existing tile
 
+#### `parse_prbm_tile(data)`
+
+Parse a PRBM (BlueMap high-resolution tile) file.
+
+- `data`: Raw PRBM file data as bytes
+
+Returns: Dictionary with parsed tile information including:
+- `version`: Format version
+- `num_triangles`: Number of triangles
+- `num_values`: Number of vertices
+- `positions`: List of (x, y, z) vertex positions
+- `colors`: List of (r, g, b) vertex colors (normalized 0.0-1.0)
+- `materials`: Material group information
+- Other attributes (uvs, ao, lighting, normals)
+
+#### `find_blocks(map_id, tile_x, tile_z, grid_size=16, offset_x=0, offset_z=0, lod=0)`
+
+Find and return block positions from a PRBM tile in in-game coordinates.
+
+- `map_id`: The ID of the map
+- `tile_x`: Tile X coordinate
+- `tile_z`: Tile Z coordinate
+- `grid_size`: Size of each tile in blocks (default: 16)
+- `offset_x`: Grid offset in X direction (default: 0)
+- `offset_z`: Grid offset in Z direction (default: 0)
+- `lod`: Level of detail (must be 0 for PRBM tiles)
+
+Returns: Dictionary containing:
+- `tile_coords`: (tile_x, tile_z) coordinates
+- `world_bounds`: ((min_x, min_z), (max_x, max_z)) world coordinate bounds
+- `num_triangles`: Number of triangles in the tile
+- `num_vertices`: Number of vertices
+- `block_positions`: List of unique (x, y, z) block positions in world coordinates
+- `vertex_positions`: List of all (x, y, z) vertex positions
+- `materials`: Material group information
+- `colors`: Vertex color information
+
+**This is the recommended method to get block positions in in-game coordinates.**
+
+#### `tile_to_world_coordinates(tile_x, tile_z, grid_size=16, offset_x=0, offset_z=0)`
+
+Convert tile coordinates to world coordinate ranges.
+
+- `tile_x`: Tile X coordinate
+- `tile_z`: Tile Z coordinate
+- `grid_size`: Size of each tile in blocks (default: 16)
+- `offset_x`: Grid offset in X direction (default: 0)
+- `offset_z`: Grid offset in Z direction (default: 0)
+
+Returns: Tuple of ((min_x, min_z), (max_x, max_z)) world coordinates
+
+#### `world_to_tile_coordinates(world_x, world_z, grid_size=16, offset_x=0, offset_z=0)`
+
+Convert world coordinates to tile coordinates.
+
+- `world_x`: World X coordinate
+- `world_z`: World Z coordinate
+- `grid_size`: Size of each tile in blocks (default: 16)
+- `offset_x`: Grid offset in X direction (default: 0)
+- `offset_z`: Grid offset in Z direction (default: 0)
+
+Returns: Tuple of (tile_x, tile_z) coordinates
+
+## PRBM Format
+
+PRBM (Packed Region Binary Model) is BlueMap's custom binary format for high-resolution tiles. Each PRBM file contains:
+
+### File Structure
+
+1. **Header** (2 bytes):
+   - Version byte (currently 1)
+   - Format bits (indexed flag, endianness, attribute count)
+
+2. **Counts** (6 bytes):
+   - Number of values (3 bytes, little-endian)
+   - Number of indices (3 bytes, little-endian, 0 for non-indexed)
+
+3. **Attributes** (7 standard attributes):
+   - **position**: 3D vertex positions (float, 32-bit)
+   - **normal**: Surface normals (normalized, 8-bit signed)
+   - **color**: RGB colors (normalized, 8-bit unsigned)
+   - **uv**: Texture coordinates (float, 32-bit)
+   - **ao**: Ambient occlusion (normalized, 8-bit unsigned)
+   - **blocklight**: Block light levels (8-bit signed)
+   - **sunlight**: Sunlight levels (8-bit signed)
+
+4. **Material Groups**:
+   - Groups of triangles by material ID
+   - Terminated with -1
+
+### Coordinate System
+
+BlueMap uses a grid-based coordinate system:
+
+- Each tile covers a rectangular area in the world
+- Default grid size is 16 blocks per tile
+- Tile (x, z) covers world coordinates:
+  - Min: `(x * grid_size + offset, z * grid_size + offset)`
+  - Max: `((x+1) * grid_size + offset - 1, (z+1) * grid_size + offset - 1)`
+
+Example with default settings (grid_size=16, offset=0):
+- Tile (0, 0) covers world blocks (0, 0) to (15, 15)
+- Tile (1, 1) covers world blocks (16, 16) to (31, 31)
+- Tile (-1, -1) covers world blocks (-16, -16) to (-1, -1)
+
 ## BlueMap Tile Structure
 
 BlueMap organizes tiles using a hierarchical directory structure:
@@ -177,13 +338,13 @@ maps/world/tiles/0/x1/2/3/z-4/5.prbm
 
 ## Limitations
 
-- **Block-level search**: The current implementation can only identify which tiles exist, not search within them for specific blocks. This is because PRBM files contain binary 3D geometry data that requires a full parser to extract block information.
+- **Block type identification**: While the parser extracts block positions from PRBM geometry, it cannot identify the specific block type (e.g., "diamond_ore" vs "stone") because PRBM files only contain rendered geometry, not block metadata. Material IDs in the PRBM correspond to textures, not block types.
   
-- **PRBM parsing**: Full parsing of PRBM (BlueMap's proprietary format) would require implementing the complete format specification. The connector provides a basic framework but doesn't include complete geometry parsing.
-
 - **Read-only**: This connector only supports reading data from BlueMap. It cannot modify or upload data.
 
-## Advanced Example
+## Advanced Examples
+
+### Example 1: Scan Area for All Blocks
 
 ```python
 from connector import BlueMapConnector
@@ -194,35 +355,72 @@ connector = BlueMapConnector("http://example.com:8100", timeout=30)
 # Get all maps
 maps = connector.get_maps()
 
-# Search each map for tiles
-for map_id in maps.keys():
-    print(f"\nSearching map: {map_id}")
-    
-    # Search in a 10x10 tile area around spawn
-    tiles = connector.search_block(
-        "any_block",  # Placeholder name
-        map_id=map_id,
-        center_x=0,
-        center_z=0,
-        radius=5,
-        lod=0
-    )
-    
-    # Download the first few tiles
-    for i, (x, z) in enumerate(tiles[:3]):
-        tile_data = connector.get_tile(map_id, x, z, lod=0)
-        print(f"  Tile ({x}, {z}): {len(tile_data)} bytes")
+# Scan a 5x5 tile area around spawn
+all_blocks = set()
+
+for tile_x in range(-2, 3):
+    for tile_z in range(-2, 3):
+        try:
+            result = connector.find_blocks('world', tile_x, tile_z)
+            blocks = result['block_positions']
+            all_blocks.update(blocks)
+            print(f"Tile ({tile_x}, {tile_z}): {len(blocks)} blocks")
+        except Exception as e:
+            print(f"Tile ({tile_x}, {tile_z}): Not available")
+
+print(f"\nTotal unique blocks: {len(all_blocks)}")
+```
+
+### Example 2: Filter Blocks by Height
+
+```python
+# Find all surface blocks (y >= 64)
+result = connector.find_blocks('world', tile_x=0, tile_z=0)
+
+surface_blocks = [
+    (x, y, z) for x, y, z in result['block_positions']
+    if y >= 64
+]
+
+underground_blocks = [
+    (x, y, z) for x, y, z in result['block_positions']
+    if y < 64
+]
+
+print(f"Surface blocks: {len(surface_blocks)}")
+print(f"Underground blocks: {len(underground_blocks)}")
+```
+
+### Example 3: Parse PRBM File Directly
+
+```python
+# If you have a PRBM file locally
+with open('tile.prbm', 'rb') as f:
+    prbm_data = f.read()
+
+# Parse it
+parsed = connector.parse_prbm_tile(prbm_data)
+
+print(f"Version: {parsed['version']}")
+print(f"Triangles: {parsed['num_triangles']}")
+print(f"Vertices: {parsed['num_values']}")
+
+# Access vertex data
+for i, pos in enumerate(parsed['positions'][:5]):
+    color = parsed['colors'][i]
+    print(f"Vertex {i}: pos={pos}, color={color}")
 ```
 
 ## Contributing
 
 Contributions are welcome! Areas for improvement:
 
-1. Complete PRBM parser implementation for full block-level search
-2. Caching mechanisms for better performance
-3. Async/parallel tile fetching
-4. Additional utility functions for common operations
-5. Better error handling and retry logic
+1. ~~Complete PRBM parser implementation~~ ✓ Implemented!
+2. Block type identification from material IDs
+3. Caching mechanisms for better performance
+4. Async/parallel tile fetching
+5. Additional utility functions for common operations
+6. Better error handling and retry logic
 
 ## License
 
