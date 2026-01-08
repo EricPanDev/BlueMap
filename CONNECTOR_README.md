@@ -137,7 +137,7 @@ Check if a tile exists without downloading its full content.
 
 Returns: True if the tile exists, False otherwise
 
-#### `search_block(block_name, map_id, center_x=0, center_z=0, radius=10, lod=0)`
+#### `search_block(block_name, map_id, center_x=0, center_z=0, radius=10, lod=0, verbose=True)`
 
 Search for chunks/tiles that may contain a specific block.
 
@@ -147,6 +147,7 @@ Search for chunks/tiles that may contain a specific block.
 - `center_z`: Center Z tile coordinate
 - `radius`: Search radius in tiles
 - `lod`: Level of detail to use (0 for hires)
+- `verbose`: If True, print progress messages (default: True)
 
 Returns: List of (x, z) tile coordinates where tiles exist
 

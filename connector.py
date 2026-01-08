@@ -101,8 +101,9 @@ class BlueMapConnector:
                 try:
                     map_settings = self.get_map_settings(map_id)
                     maps[map_id] = map_settings
-                except Exception as e:
-                    print(f"Warning: Could not load settings for map '{map_id}': {e}")
+                except (requests.RequestException, KeyError) as e:
+                    # Skip maps that can't be loaded (they may not exist or be misconfigured)
+                    pass
                     
             self._maps_cache = maps
         return self._maps_cache
@@ -259,8 +260,9 @@ class BlueMapConnector:
             else:
                 tile_path = f"{map_data_root}/{map_id}/tiles/{lod}/{path}.png"
                 
-            response = self._get(tile_path)
-            return response.status_code == 200
+            # If _get succeeds, the tile exists
+            self._get(tile_path)
+            return True
         except requests.RequestException:
             return False
     
@@ -271,7 +273,8 @@ class BlueMapConnector:
         center_x: int = 0,
         center_z: int = 0,
         radius: int = 10,
-        lod: int = 0
+        lod: int = 0,
+        verbose: bool = True
     ) -> List[Tuple[int, int]]:
         """
         Search for chunks/tiles that may contain a specific block.
@@ -291,27 +294,32 @@ class BlueMapConnector:
             center_z: Center Z tile coordinate
             radius: Search radius in tiles
             lod: Level of detail to use (0 for hires)
+            verbose: If True, print progress messages (default: True)
             
         Returns:
             List of (x, z) tile coordinates where tiles exist
         """
         found_tiles = []
         
-        print(f"Searching for block '{block_name}' in map '{map_id}'")
-        print(f"Center: ({center_x}, {center_z}), Radius: {radius} tiles")
-        print("Note: This searches for existing tiles. Full block-level search")
-        print("      requires parsing PRBM geometry data.")
+        if verbose:
+            print(f"Searching for block '{block_name}' in map '{map_id}'")
+            print(f"Center: ({center_x}, {center_z}), Radius: {radius} tiles")
+            print("Note: This searches for existing tiles. Full block-level search")
+            print("      requires parsing PRBM geometry data.")
         
         for x in range(center_x - radius, center_x + radius + 1):
             for z in range(center_z - radius, center_z + radius + 1):
                 try:
                     if self.check_tile_exists(map_id, x, z, lod):
                         found_tiles.append((x, z))
-                        print(f"  Found tile at ({x}, {z})")
-                except Exception as e:
-                    print(f"  Error checking tile ({x}, {z}): {e}")
+                        if verbose:
+                            print(f"  Found tile at ({x}, {z})")
+                except requests.RequestException:
+                    # Tile doesn't exist or couldn't be checked, skip it
+                    pass
         
-        print(f"\nFound {len(found_tiles)} existing tiles in search area")
+        if verbose:
+            print(f"\nFound {len(found_tiles)} existing tiles in search area")
         return found_tiles
     
     def get_tiles_in_area(
