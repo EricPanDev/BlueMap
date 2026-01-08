@@ -29,6 +29,7 @@ Usage:
 
 import requests
 import struct
+import math
 from typing import Dict, List, Tuple, Optional, Any, Set
 from urllib.parse import urljoin
 
@@ -297,15 +298,9 @@ class BlueMapConnector:
             # Parse attribute type
             is_float = not bool(attr_type & 0x80)
             is_normalized = bool(attr_type & 0x40)
-            cardinality = ((attr_type >> 4) & 0x3) + 1
-            if cardinality == 1:
-                cardinality = 1  # scalar
-            elif cardinality == 2:
-                cardinality = 2  # 2D vector
-            elif cardinality == 3:
-                cardinality = 3  # 3D vector
-            elif cardinality == 4:
-                cardinality = 4  # 4D vector
+            cardinality_bits = (attr_type >> 4) & 0x3
+            # Cardinality: 0=scalar(1), 1=2D(2), 2=3D(3), 3=4D(4)
+            cardinality = cardinality_bits + 1 if cardinality_bits > 0 else 1
             
             encoding = attr_type & 0x0F
             
@@ -363,7 +358,8 @@ class BlueMapConnector:
                 elif component_type == 'b':
                     val = struct.unpack('<b', data[val_offset:val_offset+1])[0]
                     if is_normalized:
-                        val = (val + 0.5) / 128.0
+                        # Normalize signed byte: -128..127 -> -1.0..1.0
+                        val = max(val / 127.0, -1.0)
                 elif component_type == 'h':
                     val = struct.unpack('<h', data[val_offset:val_offset+2])[0]
                 elif component_type == 'i':
@@ -642,7 +638,7 @@ class BlueMapConnector:
             - world_bounds: ((min_x, min_z), (max_x, max_z)) world coordinate bounds
             - num_triangles: Number of triangles in the tile
             - num_vertices: Number of vertices
-            - block_positions: Set of unique (x, y, z) block positions in world coordinates
+            - block_positions: List of unique (x, y, z) block positions in world coordinates (sorted)
             - vertex_positions: List of all (x, y, z) vertex positions in world coordinates
             
         Raises:
@@ -673,9 +669,9 @@ class BlueMapConnector:
                 vertex_positions.append((world_x, world_y, world_z))
                 
                 # Convert to block coordinates (floor to get the block position)
-                block_x = int(world_x) if world_x >= 0 else int(world_x) - 1
-                block_y = int(world_y) if world_y >= 0 else int(world_y) - 1
-                block_z = int(world_z) if world_z >= 0 else int(world_z) - 1
+                block_x = math.floor(world_x)
+                block_y = math.floor(world_y)
+                block_z = math.floor(world_z)
                 
                 block_positions.add((block_x, block_y, block_z))
         

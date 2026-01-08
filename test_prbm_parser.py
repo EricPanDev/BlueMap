@@ -21,7 +21,9 @@ def create_simple_prbm() -> bytes:
     
     # Header
     version = 1
-    header_bits = 0b0_0_0_00111  # indexed=no, endianness=little, attribute-count=7
+    # Header bits: [reserved(2) | indexed(1) | endianness(2) | attribute-count(3)]
+    # indexed=0, endianness=0 (little), attribute-count=7
+    header_bits = 0b0_0_0_00111
     
     output.write(bytes([version]))
     output.write(bytes([header_bits]))
