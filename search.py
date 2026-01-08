@@ -33,6 +33,7 @@ Usage:
 
 import sys
 import argparse
+import requests
 from typing import Generator, Tuple, Optional
 from connector import BlueMapConnector
 
@@ -80,7 +81,9 @@ def search_blocks_in_area(
         print(f"Searching for blocks in map '{map_id}'")
         print(f"  Tile range: X[{min_tile_x}, {max_tile_x}], Z[{min_tile_z}, {max_tile_z}]")
         if min_y is not None or max_y is not None:
-            y_range = f"Y[{min_y if min_y is not None else '-∞'}, {max_y if max_y is not None else '∞'}]"
+            min_str = str(min_y) if min_y is not None else '-inf'
+            max_str = str(max_y) if max_y is not None else 'inf'
+            y_range = f"Y[{min_str}, {max_str}]"
             print(f"  Height filter: {y_range}")
         print()
     
@@ -112,7 +115,7 @@ def search_blocks_in_area(
                           f"{len(blocks):5d} total, "
                           f"{result['num_triangles']:5d} triangles")
                 
-            except Exception as e:
+            except (requests.RequestException, KeyError, ValueError) as e:
                 tiles_skipped += 1
                 if verbose:
                     print(f"  Tile ({tile_x:3d}, {tile_z:3d}): Skipped - {str(e)[:50]}")

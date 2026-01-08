@@ -36,7 +36,7 @@ def test_search_functions():
     print("Test 2: PRBM parsing integration")
     print("-" * 70)
     
-    connector = BlueMapConnector("http://test:8100", timeout=1)
+    connector = BlueMapConnector("http://test.invalid:8100", timeout=1)
     prbm_data = create_simple_prbm()
     parsed = connector.parse_prbm_tile(prbm_data)
     
@@ -74,9 +74,10 @@ def test_search_functions():
     print("Test 4: CSV export functionality")
     print("-" * 70)
     
-    # Create temporary file for testing
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
-        temp_csv = f.name
+    # Use mkstemp for clearer intent when manual cleanup is required
+    import tempfile
+    fd, temp_csv = tempfile.mkstemp(suffix='.csv', text=True)
+    os.close(fd)  # Close the file descriptor, we'll open it normally
     
     try:
         # Test data
