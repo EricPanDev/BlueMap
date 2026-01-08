@@ -33,9 +33,11 @@ Usage:
 
 import sys
 import argparse
+import math
 import requests
 from typing import Generator, Tuple, Optional, Iterable
 from connector import BlueMapConnector
+
 
 
 def search_blocks_in_area(
@@ -172,6 +174,182 @@ def search_blocks_in_radius(
     )
 
 
+def search_blocks_by_type(
+    connector: BlueMapConnector,
+    map_id: str,
+    resource_path: str,
+    min_tile_x: int,
+    max_tile_x: int,
+    min_tile_z: int,
+    max_tile_z: int,
+    min_y: Optional[int] = None,
+    max_y: Optional[int] = None,
+    verbose: bool = False
+) -> Generator[Tuple[int, int, int], None, None]:
+    """
+    Search for blocks of a specific type in a rectangular tile area.
+    
+    This function uses the textures.json mapping to identify specific block types
+    from PRBM material IDs. It downloads tiles, parses them, and yields only blocks
+    that match the specified resource path.
+    
+    Args:
+        connector: BlueMapConnector instance
+        map_id: Map ID to search (e.g., "world", "world_nether")
+        resource_path: Block resource path to search for (e.g., "minecraft:block/oak_log")
+        min_tile_x, max_tile_x: X tile coordinate range (inclusive)
+        min_tile_z, max_tile_z: Z tile coordinate range (inclusive)
+        min_y: Minimum Y coordinate filter (inclusive), None for no limit
+        max_y: Maximum Y coordinate filter (inclusive), None for no limit
+        verbose: If True, print progress messages
+        
+    Yields:
+        Tuples of (x, y, z) block positions in world coordinates for matching blocks
+        
+    Example:
+        # Find all oak logs in a 5x5 tile area
+        for x, y, z in search_blocks_by_type(
+            connector, "world", "minecraft:block/oak_log",
+            min_tile_x=-2, max_tile_x=2,
+            min_tile_z=-2, max_tile_z=2,
+            verbose=True
+        ):
+            print(f"Oak log at ({x}, {y}, {z})")
+    """
+    # Get the material ID for this block type
+    material_id = connector.get_material_id_for_block(map_id, resource_path)
+    
+    if material_id is None:
+        if verbose:
+            print(f"Warning: Block type '{resource_path}' not found in textures")
+            print(f"This block type may not be present in the map or may use a different resource path")
+        return
+    
+    if verbose:
+        print(f"Searching for '{resource_path}' (material ID: {material_id})")
+        print(f"  Tile range: X[{min_tile_x}, {max_tile_x}], Z[{min_tile_z}, {max_tile_z}]")
+        if min_y is not None or max_y is not None:
+            min_str = str(min_y) if min_y is not None else '-inf'
+            max_str = str(max_y) if max_y is not None else 'inf'
+            y_range = f"Y[{min_str}, {max_str}]"
+            print(f"  Height filter: {y_range}")
+        print()
+    
+    tiles_processed = 0
+    tiles_skipped = 0
+    blocks_yielded = 0
+    
+    for tile_x in range(min_tile_x, max_tile_x + 1):
+        for tile_z in range(min_tile_z, max_tile_z + 1):
+            try:
+                # Fetch and parse the tile
+                tile_data = connector.get_tile(map_id, tile_x, tile_z, lod=0)
+                parsed = connector.parse_prbm_tile(tile_data)
+                
+                tiles_processed += 1
+                tile_block_count = 0
+                
+                # Get materials and positions
+                materials = parsed.get('materials', [])
+                positions = parsed.get('positions', [])
+                
+                # Build a set of vertex indices that use our target material
+                matching_vertices = set()
+                for mat_group in materials:
+                    if mat_group['material_id'] == material_id:
+                        start = mat_group['start']
+                        count = mat_group['count']
+                        # Each face has 3 vertices (triangle)
+                        for i in range(start, start + count):
+                            matching_vertices.add(i)
+                
+                # Convert matching vertex positions to block coordinates
+                found_blocks = set()
+                for vertex_idx in matching_vertices:
+                    if vertex_idx < len(positions):
+                        world_x, world_y, world_z = positions[vertex_idx]
+                        
+                        # Convert to block coordinates
+                        block_x = math.floor(world_x)
+                        block_y = math.floor(world_y)
+                        block_z = math.floor(world_z)
+                        
+                        # Apply height filter
+                        if min_y is not None and block_y < min_y:
+                            continue
+                        if max_y is not None and block_y > max_y:
+                            continue
+                        
+                        found_blocks.add((block_x, block_y, block_z))
+                
+                # Yield blocks
+                for block in sorted(found_blocks):
+                    yield block
+                    blocks_yielded += 1
+                    tile_block_count += 1
+                
+                if verbose and tile_block_count > 0:
+                    print(f"  Tile ({tile_x:3d}, {tile_z:3d}): {tile_block_count:5d} matching blocks")
+                
+            except (requests.RequestException, KeyError, ValueError) as e:
+                tiles_skipped += 1
+                if verbose:
+                    print(f"  Tile ({tile_x:3d}, {tile_z:3d}): Skipped - {str(e)[:50]}")
+    
+    if verbose:
+        print(f"\nSearch complete:")
+        print(f"  Tiles processed: {tiles_processed}")
+        print(f"  Tiles skipped: {tiles_skipped}")
+        print(f"  Blocks found: {blocks_yielded}")
+
+
+def search_blocks_by_type_radius(
+    connector: BlueMapConnector,
+    map_id: str,
+    resource_path: str,
+    center_x: int,
+    center_z: int,
+    radius: int,
+    min_y: Optional[int] = None,
+    max_y: Optional[int] = None,
+    verbose: bool = False
+) -> Generator[Tuple[int, int, int], None, None]:
+    """
+    Search for blocks of a specific type in a square radius around a center point.
+    
+    Args:
+        connector: BlueMapConnector instance
+        map_id: Map ID to search
+        resource_path: Block resource path to search for (e.g., "minecraft:block/oak_log")
+        center_x: Center X tile coordinate
+        center_z: Center Z tile coordinate
+        radius: Search radius in tiles
+        min_y: Minimum Y coordinate filter (inclusive), None for no limit
+        max_y: Maximum Y coordinate filter (inclusive), None for no limit
+        verbose: If True, print progress messages
+        
+    Yields:
+        Tuples of (x, y, z) block positions in world coordinates for matching blocks
+    """
+    min_tile_x = center_x - radius
+    max_tile_x = center_x + radius
+    min_tile_z = center_z - radius
+    max_tile_z = center_z + radius
+    
+    if verbose:
+        print(f"Searching radius {radius} around tile ({center_x}, {center_z})")
+        print(f"  Total area: {(2*radius+1)*(2*radius+1)} tiles")
+        print()
+    
+    yield from search_blocks_by_type(
+        connector, map_id, resource_path,
+        min_tile_x, max_tile_x,
+        min_tile_z, max_tile_z,
+        min_y, max_y,
+        verbose
+    )
+
+
 def export_to_csv(coordinates: Iterable[Tuple[int, int, int]], filename: str):
     """
     Export block coordinates to a CSV file.
@@ -212,10 +390,12 @@ Examples:
   
   # Search underground (diamond level)
   python search.py http://localhost:8100 world --radius 5 --min-y -64 --max-y 16
+  
+  # Search for specific block type (oak logs)
+  python search.py http://localhost:8100 world --radius 5 --block-type minecraft:block/oak_log
 
-Note: To find specific block types like oak logs, you need access to the world
-data files, not just the rendered BlueMap tiles. This tool finds block positions
-but cannot determine block types from PRBM geometry data.
+Note: Use --block-type to search for specific block types like oak logs.
+The tool uses textures.json to map material IDs to block types.
         '''
     )
     
@@ -231,6 +411,11 @@ but cannot determine block types from PRBM geometry data.
     
     parser.add_argument('--center', default='0,0', metavar='X,Z',
                        help='Center tile coordinates for radius search (default: 0,0)')
+    
+    # Block type filter
+    parser.add_argument('--block-type', '-b', metavar='RESOURCE_PATH',
+                       help='Filter by block type (e.g., minecraft:block/oak_log). '
+                            'Uses textures.json to identify specific blocks.')
     
     # Filters
     parser.add_argument('--min-y', type=int, metavar='Y',
@@ -284,14 +469,22 @@ but cannot determine block types from PRBM geometry data.
         print(f"Error: Could not fetch map list: {e}")
         sys.exit(1)
     
-    # Determine search area
+    # Determine search area and function to use
     if args.radius is not None:
-        search_generator = search_blocks_in_radius(
-            connector, args.map_id,
-            center_x, center_z, args.radius,
-            args.min_y, args.max_y,
-            verbose
-        )
+        if args.block_type:
+            search_generator = search_blocks_by_type_radius(
+                connector, args.map_id, args.block_type,
+                center_x, center_z, args.radius,
+                args.min_y, args.max_y,
+                verbose
+            )
+        else:
+            search_generator = search_blocks_in_radius(
+                connector, args.map_id,
+                center_x, center_z, args.radius,
+                args.min_y, args.max_y,
+                verbose
+            )
     else:
         try:
             min_coords = args.tile_range[0].split(',')
@@ -302,13 +495,22 @@ but cannot determine block types from PRBM geometry data.
             print("Error: Tile range must be in format 'x1,z1' 'x2,z2'")
             sys.exit(1)
         
-        search_generator = search_blocks_in_area(
-            connector, args.map_id,
-            min_tile_x, max_tile_x,
-            min_tile_z, max_tile_z,
-            args.min_y, args.max_y,
-            verbose
-        )
+        if args.block_type:
+            search_generator = search_blocks_by_type(
+                connector, args.map_id, args.block_type,
+                min_tile_x, max_tile_x,
+                min_tile_z, max_tile_z,
+                args.min_y, args.max_y,
+                verbose
+            )
+        else:
+            search_generator = search_blocks_in_area(
+                connector, args.map_id,
+                min_tile_x, max_tile_x,
+                min_tile_z, max_tile_z,
+                args.min_y, args.max_y,
+                verbose
+            )
     
     # Process results
     if args.output:
