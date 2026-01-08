@@ -134,7 +134,9 @@ print(f"Downloaded {len(tiles)} tiles")
 
 ## Command-Line Usage
 
-You can also run the connector directly from the command line:
+### connector.py
+
+You can run the connector directly from the command line:
 
 ```bash
 python connector.py http://localhost:8100
@@ -144,6 +146,93 @@ This will:
 1. Connect to the specified BlueMap instance
 2. Display available maps and their settings
 3. Perform an example tile search
+
+### search.py - Block Position Search Tool
+
+The `search.py` script provides a command-line interface for searching and extracting block positions from BlueMap servers:
+
+```bash
+# Search for blocks in a 5-tile radius around spawn
+python search.py http://localhost:8100 world --radius 5
+
+# Search with height filter (surface level where trees grow)
+python search.py http://localhost:8100 world --radius 3 --min-y 60 --max-y 100
+
+# Export results to CSV
+python search.py http://localhost:8100 world --radius 2 --output blocks.csv
+```
+
+**Key Features:**
+- Search blocks in a radius or specific tile range
+- Filter by height (Y coordinate)
+- Export coordinates to CSV
+- Yields in-game world coordinates
+- Progress reporting
+
+**Important Limitation:**
+The search tool can find block *positions* but cannot identify block *types* (e.g., cannot distinguish oak logs from stone) because PRBM files only contain rendering geometry, not block metadata. Material IDs correspond to textures, not block types.
+
+For detailed usage examples and limitations, see `search_examples.py`:
+
+```bash
+python search_examples.py
+```
+
+#### search.py Usage
+
+```
+python search.py [-h] (--radius N | --tile-range MIN MAX) 
+                 [--center X,Z] [--min-y Y] [--max-y Y] 
+                 [--output FILE] [--limit N] [--quiet] [--timeout SECONDS]
+                 url map_id
+```
+
+**Positional arguments:**
+- `url` - BlueMap server URL (e.g., http://localhost:8100)
+- `map_id` - Map ID to search (e.g., world, world_nether)
+
+**Search area options:**
+- `--radius N` - Search radius in tiles around center
+- `--tile-range MIN MAX` - Tile range as "x1,z1" "x2,z2"
+- `--center X,Z` - Center tile coordinates for radius search (default: 0,0)
+
+**Filters:**
+- `--min-y Y` - Minimum Y coordinate (height) filter
+- `--max-y Y` - Maximum Y coordinate (height) filter
+
+**Output options:**
+- `--output FILE, -o FILE` - Export coordinates to CSV file
+- `--limit N` - Maximum number of coordinates to return
+- `--quiet, -q` - Suppress progress messages
+- `--timeout SECONDS` - Request timeout in seconds (default: 30)
+
+#### Programmatic Usage of search.py
+
+The search functions can also be imported and used programmatically:
+
+```python
+from search import search_blocks_in_radius, export_to_csv
+from connector import BlueMapConnector
+
+connector = BlueMapConnector("http://localhost:8100")
+
+# Search for surface blocks
+surface_blocks = []
+for x, y, z in search_blocks_in_radius(
+    connector,
+    map_id="world",
+    center_x=0,
+    center_z=0,
+    radius=5,
+    min_y=60,  # Surface level
+    max_y=100,
+    verbose=True
+):
+    surface_blocks.append((x, y, z))
+
+# Export to CSV
+export_to_csv(surface_blocks, "surface_blocks.csv")
+```
 
 ## API Reference
 
@@ -338,7 +427,9 @@ maps/world/tiles/0/x1/2/3/z-4/5.prbm
 
 ## Limitations
 
-- **Block type identification**: While the parser extracts block positions from PRBM geometry, it cannot identify the specific block type (e.g., "diamond_ore" vs "stone") because PRBM files only contain rendered geometry, not block metadata. Material IDs in the PRBM correspond to textures, not block types.
+- **Block type identification**: While the parser extracts block positions from PRBM geometry, it cannot identify the specific block type (e.g., "oak_log" vs "stone") because PRBM files only contain rendered geometry, not block metadata. Material IDs in the PRBM correspond to textures, not block types.
+  
+  **Workaround**: The `search.py` tool can find block positions and filter by height (Y coordinate), which can help narrow down blocks to surface level (where trees grow) or specific underground levels. However, you still cannot distinguish between different block types at those positions using only PRBM data.
   
 - **Read-only**: This connector only supports reading data from BlueMap. It cannot modify or upload data.
 
