@@ -28,7 +28,7 @@ Usage:
     python search.py http://localhost:8100 world --radius 3 --min-y 60 --max-y 100
     
     # Search specific tile range
-    python search.py http://localhost:8100 world --tile-min -2,-2 --tile-max 2,2
+    python search.py http://localhost:8100 world --tile-range "-2,-2" "2,2"
 """
 
 import sys
@@ -202,7 +202,7 @@ Examples:
   python search.py http://localhost:8100 world --radius 3 --min-y 60 --max-y 100
   
   # Search specific tile range
-  python search.py http://localhost:8100 world --tile-min -2,-2 --tile-max 2,2
+  python search.py http://localhost:8100 world --tile-range "-2,-2" "2,2"
   
   # Export results to CSV
   python search.py http://localhost:8100 world --radius 2 --output blocks.csv
