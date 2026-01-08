@@ -34,7 +34,7 @@ Usage:
 import sys
 import argparse
 import requests
-from typing import Generator, Tuple, Optional
+from typing import Generator, Tuple, Optional, Iterable
 from connector import BlueMapConnector
 
 
@@ -172,7 +172,7 @@ def search_blocks_in_radius(
     )
 
 
-def export_to_csv(coordinates, filename: str):
+def export_to_csv(coordinates: Iterable[Tuple[int, int, int]], filename: str):
     """
     Export block coordinates to a CSV file.
     

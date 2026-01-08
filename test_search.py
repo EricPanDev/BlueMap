@@ -75,7 +75,6 @@ def test_search_functions():
     print("-" * 70)
     
     # Use mkstemp for clearer intent when manual cleanup is required
-    import tempfile
     fd, temp_csv = tempfile.mkstemp(suffix='.csv', text=True)
     os.close(fd)  # Close the file descriptor, we'll open it normally
     
