@@ -54,6 +54,7 @@ class BlueMapConnector:
         self.timeout = timeout
         self._settings_cache = None
         self._maps_cache = None
+        self._textures_cache = {}  # Cache per map_id
         
     def _get(self, path: str) -> requests.Response:
         """
@@ -128,6 +129,99 @@ class BlueMapConnector:
         path = f"{map_data_root}/{map_id}/settings.json"
         response = self._get(path)
         return response.json()
+    
+    def get_textures(self, map_id: str, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        """
+        Fetch the textures.json for a specific map.
+        
+        This file contains the mapping between material IDs (array indices) and
+        block resource paths, allowing identification of block types from PRBM
+        material IDs.
+        
+        Args:
+            map_id: The ID of the map
+            force_refresh: If True, bypass cache and fetch fresh data
+            
+        Returns:
+            List of texture dictionaries, each containing:
+            - resourcePath: Block resource path (e.g., "minecraft:block/oak_log")
+            - color: RGBA color values
+            - halfTransparent: Boolean transparency flag
+            - texture: Base64-encoded texture data
+            
+        Example:
+            textures = connector.get_textures("world")
+            # Find oak log texture ID
+            for i, tex in enumerate(textures):
+                if tex['resourcePath'] == 'minecraft:block/oak_log':
+                    oak_log_material_id = i
+        """
+        if map_id not in self._textures_cache or force_refresh:
+            settings = self.get_settings()
+            map_data_root = settings.get('mapDataRoot', 'maps')
+            
+            # The textures.json URL typically has a cache-busting query parameter
+            # We'll try without it first, then with a timestamp if needed
+            path = f"{map_data_root}/{map_id}/textures.json"
+            
+            try:
+                response = self._get(path)
+                self._textures_cache[map_id] = response.json()
+            except requests.RequestException:
+                # Try with a simple cache-busting parameter
+                import time
+                cache_bust = int(time.time())
+                path = f"{map_data_root}/{map_id}/textures.json?{cache_bust}"
+                response = self._get(path)
+                self._textures_cache[map_id] = response.json()
+        
+        return self._textures_cache[map_id]
+    
+    def get_material_id_for_block(self, map_id: str, resource_path: str) -> Optional[int]:
+        """
+        Get the material ID for a specific block resource path.
+        
+        Args:
+            map_id: The ID of the map
+            resource_path: Block resource path (e.g., "minecraft:block/oak_log")
+            
+        Returns:
+            Material ID (index in textures array) or None if not found
+            
+        Example:
+            oak_log_id = connector.get_material_id_for_block("world", "minecraft:block/oak_log")
+            if oak_log_id is not None:
+                print(f"Oak log material ID: {oak_log_id}")
+        """
+        textures = self.get_textures(map_id)
+        
+        for i, texture in enumerate(textures):
+            if texture.get('resourcePath') == resource_path:
+                return i
+        
+        return None
+    
+    def get_block_resource_path(self, map_id: str, material_id: int) -> Optional[str]:
+        """
+        Get the block resource path for a specific material ID.
+        
+        Args:
+            map_id: The ID of the map
+            material_id: Material ID from PRBM file
+            
+        Returns:
+            Block resource path or None if material_id is out of range
+            
+        Example:
+            resource = connector.get_block_resource_path("world", 42)
+            print(f"Material 42 is: {resource}")
+        """
+        textures = self.get_textures(map_id)
+        
+        if 0 <= material_id < len(textures):
+            return textures[material_id].get('resourcePath')
+        
+        return None
     
     @staticmethod
     def _path_from_coords(x: int, z: int) -> str:
