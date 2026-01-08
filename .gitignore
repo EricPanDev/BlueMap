@@ -23,3 +23,10 @@ core/src/main/resources/de/bluecolored/bluemap/resourceExtensions.zip
 
 #exclude-test-data
 data/test-render
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
